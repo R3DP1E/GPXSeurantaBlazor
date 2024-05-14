@@ -1,0 +1,478 @@
+﻿@page "/GPXSeuranta"
+@using ScottPlot
+@using ScottPlot.Blazor
+@using ScottPlot.Plottables
+@using System.Xml.Linq
+@using System.Linq
+@using System.Globalization
+@using System.Threading.Tasks
+@inject IJSRuntime JS
+
+<PageTitle>GPXSeuranta</PageTitle>
+
+<p>Upload @maxAllowedFiles files to compare them</p>
+<p>
+    <InputFile OnChange="@((InputFileChangeEventArgs) => LoadFiles(InputFileChangeEventArgs, "upload1"))" accept=".gpx" />
+    Edit value:<input type="checkbox" @bind="checkbox1" />
+</p>
+<p>
+    <InputFile OnChange="@((InputFileChangeEventArgs) => LoadFiles(InputFileChangeEventArgs, "upload2"))" accept=".gpx" />
+    Edit value:<input type="checkbox" @bind="checkbox2" />
+</p>
+
+@if (loadedFiles.Count > 0)
+{
+    <button @onclick="clearFiles">Clear files</button>
+}
+@if (loadedFiles.Count == 2)
+{
+    @if (checkbox1 | checkbox2)
+    {
+        <p>Cut the data you want by clicking to place boundaries and then clicking the "cut data" button</p>
+        <p>Once you have placed the boundaries you can move them by dragging them, the boundaries will snap to the closest datapoint to the mouse</p>
+        <button @onclick="EditData">Display data to edit</button>
+        @if (displayCutButton)
+        {
+            <button @onclick="CutData">Cut data</button>
+        }
+        @if (checkbox1)
+        {
+            <BlazorPlot @ref=EditPlot1 Style="width: 1200px; height: 600px;" />
+        }
+        @if (checkbox2)
+        {
+            <BlazorPlot @ref=EditPlot2 Style="width: 1200px; height: 600px;" />
+        }
+        
+
+    }
+    else if (!dataIsCut)
+    {
+        <button @onclick="processFiles">Compare</button>       
+    }
+    @if (dataIsCut)
+    {
+        <button @onclick="processFiles">Compare</button>
+    }
+    /*@if(isProcessed)
+    {
+        <button @onclick="SavePlot">Save image</button>
+        
+    }*/
+}
+
+
+@if (isProcessing)
+{
+    <p>Processing...</p>
+}
+<BlazorPlot @ref=GPXplot Style="width: 1200px; height: 600px;" />
+
+@code {
+    private List<StoredFile> loadedFiles = new();
+    private long maxFileSize = 4096 * 1000;
+    private int maxAllowedFiles = 2;
+    private bool isProcessing;
+    private bool checkbox1 = false;
+    private bool checkbox2 = false;
+    private bool dataIsCut;
+    private bool displayCutButton = false;
+    private bool isProcessed = false;
+
+    List<List<Coordinate>> coordinates = new List<List<Coordinate>>();
+    List<Coordinate> editBoundaries1 = new List<Coordinate>(); 
+    List<Coordinate> editBoundaries2 = new List<Coordinate>();
+
+    BlazorPlot GPXplot { get; set; } = new();
+    BlazorPlot EditPlot1 { get; set; } = new();
+    BlazorPlot EditPlot2 { get; set; } = new();
+
+    private void clearFiles()
+    {
+        loadedFiles.Clear();
+        coordinates.Clear();
+        dataIsCut = false;
+        displayCutButton = false;
+    }
+
+    private void CutData()
+    {
+        if (checkbox1 = true)
+        {
+            checkbox1 = false;
+            coordinates.Add(editBoundaries1);
+            loadedFiles.Find(x => x.id == "upload1").isCut = true;
+        }
+        if (checkbox2 = true)
+        {
+            checkbox2 = false;
+            coordinates.Add(editBoundaries2);
+            loadedFiles.Find(x => x.id == "upload2").isCut = true;
+        }
+
+        dataIsCut = true;
+    }
+
+    private async Task LoadFiles(InputFileChangeEventArgs e, string id)
+    {
+        dataIsCut = false;
+        displayCutButton = false;
+        try
+        {
+            StoredFile x = new StoredFile { content = e.File, id = id };
+            loadedFiles.Add(x);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine("Error: " + ex.Message);
+        }
+    }
+
+    private async Task EditData()
+    {
+        using var cts = new CancellationTokenSource();
+        var token = cts.Token;
+
+        StoredFile gpxFile1 = null;
+        StoredFile gpxFile2 = null;
+
+        displayCutButton = true;
+
+
+        if (checkbox1 == true)
+        {
+            gpxFile1 = loadedFiles.Find(StoredFile => StoredFile.id == "upload1");
+            var t = Task.Run(() => displayEditedData(gpxFile1, EditPlot1));
+        }
+        if (checkbox2 == true)
+        {
+            gpxFile2 = loadedFiles.Find(StoredFile => StoredFile.id == "upload2");
+            var t = Task.Run(() => displayEditedData(gpxFile2, EditPlot2));
+        }        
+    }
+
+    private async Task displayEditedData(StoredFile gpxFile, BlazorPlot editPlot)
+    {
+        MemoryStream ms = new MemoryStream(capacity: 4096000);
+        await gpxFile.content.OpenReadStream(maxFileSize).CopyToAsync(ms);
+
+        if (ms.Position > 0)
+        {
+            ms.Position = 0;
+        }
+
+        XElement root = XElement.Load(ms);
+        XNamespace x = "http://www.topografix.com/GPX/1/1";
+        IEnumerable<XElement> fileContents =
+                from el in root.Elements(x + "trk").Descendants(x + "trkpt")
+                select el;
+        List<Coordinate> tempList = new List<Coordinate>();
+        foreach (XElement el in fileContents)
+        {
+            tempList.Add(new Coordinate(
+                double.Parse(el.Attribute("lat").Value, CultureInfo.InvariantCulture),
+                double.Parse(el.Attribute("lon").Value, CultureInfo.InvariantCulture),
+                double.Parse(el.Element(x + "ele").Value, CultureInfo.InvariantCulture),
+                DateTime.Parse(el.Element(x + "time").Value, CultureInfo.InvariantCulture)
+                ));
+        }
+
+        //luodaan x-akseli jonka pisteet korkeuskuvaajan tilanteessa kuvaavat GPX tiedostoissa yhtä sekuntia
+        double[] xs = Generate.Consecutive(tempList.Count);
+
+        var elevation = editPlot.Plot.Add.Scatter(xs, tempList.Select(x => x.Elevation).ToArray());
+        elevation.MarkerSize = 0;
+        elevation.Axes.YAxis = editPlot.Plot.Axes.Left;
+        elevation.Label = "Elevation";
+        elevation.PathStrategy = new ScottPlot.PathStrategies.QuadHalfPoint();
+        editPlot.Plot.Axes.Left.Label.Text = "Elevation(m)";
+        editPlot.Plot.Axes.Left.IsVisible = true;
+        editPlot.Plot.Axes.AutoScale(); 
+
+        // otetaan normaalit hiiren interaktiot pois käytöstä jotta ne eivät tee rajauksen tekemisestä vaikeampaa
+        editPlot.Interaction.Disable();
+
+        editPlot.Refresh();
+
+
+        VerticalLine? PlottableBeingDragged = null;
+
+        // esittää pysty- ja vaakaviivan avulla missä rajausta varten tuleva kohta on.
+        var v1 = editPlot.Plot.Add.Crosshair(0, 0);
+        editPlot.HandlerPointerMoved += (s, e) =>
+                {
+                    Pixel mousePixel = new(e.OffsetX, e.OffsetY);
+                    Coordinates mouseLocation = editPlot.Plot.GetCoordinates(mousePixel);
+                    DataPoint nearest = elevation.Data.GetNearest(mouseLocation, editPlot.Plot.LastRender);
+
+                    if (nearest.IsReal && (editPlot.Plot.GetPlottables<VerticalLine>().ToList().Count < 2))
+                    {
+                        v1.IsVisible = true;
+                        v1.Position = nearest.Coordinates;
+                        v1.VerticalLine.Text = nearest.Coordinates.X.ToString();
+                        editPlot.Refresh();
+                    }
+
+                    if (!nearest.IsReal && v1.IsVisible)
+                    {
+                        v1.IsVisible = false;
+                        editPlot.Refresh();
+                    }
+                    if ((editPlot.Plot.GetPlottables<VerticalLine>().ToList().Count >= 2) && (PlottableBeingDragged != null))
+                    {
+                        PlottableBeingDragged.X = mouseLocation.X;
+                        editPlot.Refresh();
+                    }
+
+                };
+
+
+        // Lisää pystysuuntaisen viivan klikattuun kohtaan datan rajaamista varten
+        editPlot.HandlerPointerReleased += (s, e) =>
+            {
+                Pixel mousePixel = new(e.OffsetX, e.OffsetY);
+                Coordinates mouseLocation = editPlot.Plot.GetCoordinates(mousePixel);
+                DataPoint nearest = elevation.Data.GetNearest(mouseLocation, editPlot.Plot.LastRender);
+
+
+                if (nearest.IsReal && (editPlot.Plot.GetPlottables<VerticalLine>().ToList().Count < 2))
+                {
+                    var temp = editPlot.Plot.Add.VerticalLine(nearest.Coordinates.X);
+                    temp.IsDraggable = true;
+                }
+                List<VerticalLine> plottables = editPlot.Plot.GetPlottables<VerticalLine>().ToList();
+                if (PlottableBeingDragged != null)
+                {
+                    PlottableBeingDragged.X = elevation.Data.GetNearest(mouseLocation, editPlot.Plot.LastRender, 200).X;
+                    PlottableBeingDragged = null; 
+                }
+                if (plottables.Count == 2)
+                {
+                    plottables.OrderBy(x => x.X);
+                    switch (gpxFile.id)
+                    {
+                        case "upload1":
+                            editBoundaries1.Clear();
+                            editBoundaries1 = tempList.Slice(((int)plottables.First().X), ((int)(plottables.Last().X - plottables.First().X)));
+                            break;
+                        case "upload2":
+                            editBoundaries2.Clear();
+                            editBoundaries2 = tempList.Slice(((int)plottables.First().X), ((int)(plottables.Last().X - plottables.First().X)));
+                            break;
+                        default: break;
+                    }
+                }
+                editPlot.Refresh();
+            };
+
+
+        editPlot.HandlerPointerPressed += (s, e) =>
+        {
+            var lineUnderMouse = GetLineUndetMouse(editPlot, ((float)e.OffsetX), ((float)e.OffsetY));
+            switch (gpxFile.id)
+            {
+                case "upload1":
+                    if (editBoundaries1.Count >= 2)
+                    {
+                        PlottableBeingDragged = lineUnderMouse;
+                    };
+                    break;
+                case "upload2":
+                    if (editBoundaries2.Count >= 2)
+                    {
+                        PlottableBeingDragged = lineUnderMouse;
+                    };
+                    break;
+                default: break;
+            }
+        };
+    }
+
+    private VerticalLine? GetLineUndetMouse(BlazorPlot plot ,float x, float y)
+    {
+        CoordinateRect rect = plot.Plot.GetCoordinateRect(x, y, radius: 20);
+
+        foreach (VerticalLine verLine in plot.Plot.GetPlottables<VerticalLine>().Reverse())
+        {
+
+            if (verLine.IsUnderMouse(rect))
+            {
+                return verLine;
+            }
+        }
+        return null;
+    }
+
+    private async Task processFiles()
+    {
+        GPXplot.Reset();
+        using var cts = new CancellationTokenSource();
+        var token = cts.Token;
+
+        if (loadedFiles.Count == 2)
+        {
+            isProcessing = true;
+
+            // Käyttäen GPX XML schemaa luetaan GPX filuista tarvittavat tiedot listoihin
+            foreach (var gpxFile in loadedFiles)
+            {
+                if(gpxFile.isCut == true)
+                {
+                    continue;
+                }
+                MemoryStream ms = new MemoryStream(capacity: 4096000);
+                await gpxFile.content.OpenReadStream(maxFileSize).CopyToAsync(ms);
+
+                if (ms.Position > 0)
+                {
+                    ms.Position = 0;
+                }
+
+                XElement root = XElement.Load(ms);
+                XNamespace x = "http://www.topografix.com/GPX/1/1";
+                IEnumerable<XElement> fileContents =
+                        from el in root.Elements(x + "trk").Descendants(x + "trkpt")
+                        select el;
+                List<Coordinate> tempList = new List<Coordinate>();
+                foreach (XElement el in fileContents)
+                {
+                    tempList.Add(new Coordinate(
+                        double.Parse(el.Attribute("lat").Value, CultureInfo.InvariantCulture),
+                        double.Parse(el.Attribute("lon").Value, CultureInfo.InvariantCulture),
+                        double.Parse(el.Element(x + "ele").Value, CultureInfo.InvariantCulture),
+                        DateTime.Parse(el.Element(x + "time").Value, CultureInfo.InvariantCulture)
+                        ));
+                }
+                coordinates.Add(tempList);
+            }
+            coordinates = coordinates.OrderByDescending(o => o.Count).ToList();
+
+            List<Tuple<Coordinate, Coordinate>> matchedCoordinates = CoordinateMatcher.MatchCoordinates(coordinates[0].ToArray(), coordinates[1].ToArray());
+            DateTime basetime1 = coordinates[0].First().Time;
+            DateTime basetime2 = coordinates[1].First().Time;
+
+
+            double[] xs = Generate.Consecutive(matchedCoordinates.Count);
+
+            var elevation = GPXplot.Plot.Add.Scatter(xs, matchedCoordinates.Select(x => x.Item1.Elevation).ToArray());
+            elevation.MarkerSize = 0;
+            elevation.Axes.YAxis = GPXplot.Plot.Axes.Right;
+            elevation.Label = "Elevation";
+            elevation.PathStrategy = new ScottPlot.PathStrategies.QuadHalfPoint();
+
+            GPXplot.Plot.Axes.Right.Label.Text = "Elevation(m)";
+            GPXplot.Plot.Axes.Right.IsVisible = true;
+
+            var timeDif = GPXplot.Plot.Add.Scatter(xs,
+                    matchedCoordinates.Select(
+                        x => (double)(x.Item1.Time - basetime1).Subtract(x.Item2.Time - basetime2).TotalMinutes).ToArray());
+            timeDif.MarkerSize = 0;
+            timeDif.Axes.YAxis = GPXplot.Plot.Axes.Left;
+            timeDif.Label = "Time difference";
+            timeDif.PathStrategy = new ScottPlot.PathStrategies.QuadHalfPoint();
+
+            GPXplot.Plot.Axes.Left.Label.Text = "Time difference(minutes)";
+            //Autoscale pitää käyttää jotaa kummatkin kuvaajat ovat näkyvissä samaan aikaan järkevässä suhteessa
+            GPXplot.Plot.Axes.AutoScale();
+            GPXplot.Plot.ShowLegend();
+            GPXplot.Plot.Axes.Bottom.IsVisible = false;
+            GPXplot.Plot.Add.HorizontalLine(0);
+
+            GPXplot.Refresh();
+            isProcessing = false;
+            isProcessed = true;
+        }
+    }
+
+    public void SavePlot()
+    {
+        GPXplot.Plot.Save("test.png", 1200, 600, ImageFormat.Jpeg);
+    }
+
+    class Coordinate
+    {
+        public double Latitude { get; set; }
+        public double Longitude { get; set; }
+        public double Elevation { get; set; }
+        public DateTime Time { get; set; }
+
+        public Coordinate(double latitude, double longitude, double elevation, DateTime time)
+        {
+            Latitude = latitude;
+            Longitude = longitude;
+            Elevation = elevation;
+            Time = time;
+        }
+
+        public double Haversine(Coordinate other)
+        {
+            // Ei varmaan tarpeellista mutta lasken käyttäen haversine funktiota eli otan maan pinnan muodon mukaan laskennassa.
+            const double r = 6371e3; // Maan säde
+            var dlat = (other.Latitude - Latitude) / 2;
+            var dlon = (other.Longitude - Longitude) / 2;
+
+            var q = Math.Pow(Math.Sin(dlat), 2) + Math.Cos(Latitude) * Math.Cos(other.Latitude) * Math.Pow(Math.Sin(dlon), 2);
+            var c = 2 * Math.Atan2(Math.Sqrt(q), Math.Sqrt(1 - q));
+
+            var d = r * c;
+            return d / 1000;
+        }
+        public Double TimeDiff(Coordinate other, DateTime basetime1, DateTime basetime2)
+        {
+            double difference = (Time - basetime1).Subtract(other.Time - basetime2).TotalMinutes;
+            return difference;
+        }
+    }
+
+    class StoredFile
+    {
+        public IBrowserFile? content { get; set; }
+        public string? id { get; set; }
+        public bool isCut { get; set; }
+    }
+
+    class CoordinateMatcher
+    {
+        public static List<Tuple<Coordinate, Coordinate>> MatchCoordinates(Coordinate[] array1, Coordinate[] array2)
+        {
+            List<Tuple<Coordinate, Coordinate>> matchedCoordinates = new List<Tuple<Coordinate, Coordinate>>();
+            DateTime basetime1 = array1[0].Time;
+            DateTime basetime2 = array2[0].Time;
+            double previousTimeDifference = 0;
+
+            foreach (var coord1 in array1)
+            {
+                double timeDifference = 0;
+                double maxDistance = 10;
+                double closestTime = 0;
+                double tolerance = 0.1; // toleranssi minuuteissa siitä kuinka kauan ajallisesti kordinaatti saa poiketa edeltävästä koordinaatista 
+
+                Coordinate closestCoord = null;
+
+                // etsitään lähin kordinaatti toisesta GPX tiedostosta joka ajallisesti ei ole liian kaukana aiemmasta
+                foreach (var coord2 in array2)
+                {
+                    timeDifference = coord1.TimeDiff(coord2, basetime1, basetime2);                 
+                    if ((timeDifference < (previousTimeDifference + tolerance)) && (timeDifference > (previousTimeDifference - tolerance)))
+                    {
+                        double distance = coord1.Haversine(coord2);
+                        if (distance < maxDistance)
+                        {
+                            maxDistance = distance;
+                            closestCoord = coord2;
+                            closestTime = timeDifference;
+                        }
+                    }
+                }
+
+                // sitten kun kaikki kordinaatit on käyty läpi ja lähin kordinaatti on olemassa, se lisätään matched coordinates listalle
+                if (closestCoord != null)
+                {
+                    previousTimeDifference = closestTime;
+                    matchedCoordinates.Add(new Tuple<Coordinate, Coordinate>(coord1, closestCoord));
+                }
+            }
+            return matchedCoordinates;
+        }
+    }
+}
