@@ -363,9 +363,14 @@
             GPXplot.Plot.Axes.Right.Label.Text = "Elevation(m)";
             GPXplot.Plot.Axes.Right.IsVisible = true;
 
+
+
             var timeDif = GPXplot.Plot.Add.Scatter(xs,
-                    matchedCoordinates.Select(
-                        x => (double)(x.Item1.Time - basetime1).Subtract(x.Item2.Time - basetime2).TotalMinutes).ToArray());
+                    matchedCoordinates
+                    //.Where(item => item.Item2 != null)
+                    .Select(x => (double)(x.Item1.Time - basetime1).Subtract(x.Item2.Time - basetime2).TotalMinutes)
+                    .DefaultIfEmpty(double.NaN)
+                    .ToArray());
             timeDif.MarkerSize = 0;
             timeDif.Axes.YAxis = GPXplot.Plot.Axes.Left;
             timeDif.Label = "Time difference";
@@ -470,6 +475,10 @@
                 {
                     previousTimeDifference = closestTime;
                     matchedCoordinates.Add(new Tuple<Coordinate, Coordinate>(coord1, closestCoord));
+                }
+                else
+                {
+                    matchedCoordinates.Add(new Tuple<Coordinate, Coordinate>(coord1, null));
                 }
             }
             return matchedCoordinates;
