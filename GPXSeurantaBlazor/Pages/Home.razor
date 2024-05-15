@@ -363,14 +363,30 @@
             GPXplot.Plot.Axes.Right.Label.Text = "Elevation(m)";
             GPXplot.Plot.Axes.Right.IsVisible = true;
 
+            List<double> processedCoordinates = new List<double>();
 
+            foreach (var item in matchedCoordinates)
+            {
+                if (item.Item2 == null)
+                {
+                    processedCoordinates.Add(double.NaN);
+                }
+                else
+                {
+                    processedCoordinates.Add((double)(item.Item1.Time - basetime1).Subtract(item.Item2.Time - basetime2).TotalMinutes);
+                }
+            }
 
             var timeDif = GPXplot.Plot.Add.Scatter(xs,
+                    processedCoordinates.ToArray());
+
+            /*var timeDif = GPXplot.Plot.Add.Scatter(xs,
                     matchedCoordinates
                     .Where(item => item.Item2 != null)
                     .Select(x => (double)(x.Item1.Time - basetime1).Subtract(x.Item2.Time - basetime2).TotalMinutes)
                     .DefaultIfEmpty(double.NaN)
                     .ToArray());
+            */
             timeDif.MarkerSize = 0;
             timeDif.Axes.YAxis = GPXplot.Plot.Axes.Left;
             timeDif.Label = "Time difference";
