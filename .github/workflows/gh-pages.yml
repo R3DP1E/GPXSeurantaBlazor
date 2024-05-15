@@ -1,11 +1,9 @@
 name: build and test and deploy
 on:
   push:
-    branches:
-      - main
+    branches: [master]
   pull_request:
-    branches:
-      - main
+    branches: [master]
 jobs:
   deploy-to-github-pages:
   # use ubuntu-latest image to run steps on
