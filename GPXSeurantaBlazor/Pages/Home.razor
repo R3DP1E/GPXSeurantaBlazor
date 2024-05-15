@@ -367,7 +367,7 @@
 
             var timeDif = GPXplot.Plot.Add.Scatter(xs,
                     matchedCoordinates
-                    //.Where(item => item.Item2 != null)
+                    .Where(item => item.Item2 != null)
                     .Select(x => (double)(x.Item1.Time - basetime1).Subtract(x.Item2.Time - basetime2).TotalMinutes)
                     .DefaultIfEmpty(double.NaN)
                     .ToArray());
